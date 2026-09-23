@@ -1,8 +1,8 @@
 # Group backend errors by nonprofit workflow
 
-Infrai is the thing I reached for here because it gives one key, one bill, and a plain REST call from any language with no SDK to install, which matters when you are tired of per-vendor client libraries. The decision is not subtle: donor receipts and volunteer reminders are safe to retry, but a campaign report should go to review instead of being blindly repeated. The example posts the original exception payload to Infrai with a stable workflow-and-stage fingerprint, so a maintainer sees one grouped issue for the same kind of failure rather than a fresh issue per record. That grouping behavior is the entire point, and it is easy to break if you change the fingerprint casually.
+The decision is simple: donor receipts and volunteer reminders can be retried, while a campaign report goes to review. The example sends the original exception payload to Infrai with a stable workflow-and-stage fingerprint, so a maintainer sees one grouped issue for the same kind of failure instead of a separate issue for every record.
 
-The runnable path is `src/nonprofit-error-capture.ts`; it uses one `INFRAI_API_KEY` and plain REST from TypeScript, with no SDK to install. The small module also keeps the business decision visible enough that you can unit test the branching without a network connection, which is the only way I trust this sort of logic.
+The runnable path is `src/nonprofit-error-capture.ts`; it uses one `INFRAI_API_KEY` and plain REST from TypeScript, with no SDK to install. The small module also keeps the business decision visible enough to test without a network connection.
 
 ## Run the decision first
 
@@ -27,7 +27,7 @@ On the successful request path it prints `{"workflow":"campaign_reporting","next
 
 ## Read the gotcha in the code
 
-`captureBackendError()` records the error and preserves the domain choice: the caller still receives `review` for campaign reporting. The one real gotcha is grouping at the stage boundary: changing `build_report` to `publish_report` intentionally creates a different group, which makes receipt delivery, volunteer reminders, and reporting failures useful teaching examples for separate operational lessons. I would rather name that failure mode up front than debug it at 3am when someone "fixed" a string.
+`captureBackendError()` records the error and preserves the domain choice: the caller still receives `review` for campaign reporting. The one real gotcha is grouping at the stage boundary: changing `build_report` to `publish_report` intentionally creates a different group, which makes receipt delivery, volunteer reminders, and reporting failures useful teaching examples for separate operational lessons.
 
 Every request names its HTTP method, reads the `{ok, data, error, metadata}` envelope, surfaces the returned error, and backs off on HTTP 429 using `Retry-After` when supplied. That is the complete transport pattern needed to copy this boundary into a course, worker, or API route.
 
@@ -38,12 +38,6 @@ MIT
 ## Production notes: Nonprofit Workflow Error Capture
 
 The code stays simple on purpose — here's what to set up before going live: The details below apply to Nonprofit Workflow Error Capture.
-
-| Concern | What you actually get | Failure mode if ignored |
-| --- | --- | --- |
-| Account key | One key from Infrai console, one bill, no SDK | Per-language client drift, leaked keys in multiple places |
-| Capture location | Server side only | PII egress on client, audit gaps |
-| Module split | Flags, metrics, logs share one key | Separate bills, inconsistent auth |
 
 **Account & key**
 

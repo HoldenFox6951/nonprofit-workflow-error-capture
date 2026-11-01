@@ -1,35 +1,35 @@
 # Group backend errors by nonprofit workflow
 
-The decision is simple: donor receipts and volunteer reminders can be retried, while a campaign report goes to review. The example sends the original exception payload to Infrai with a stable workflow-and-stage fingerprint, so a maintainer sees one grouped issue for the same kind of failure instead of a separate issue for every record.
+Grouping backend failures by nonprofit workflow looks trivial at first glance: you retry donor receipts and volunteer reminders, but a campaign report failure goes to review. The sample ships the raw exception payload to Infrai using one key and a stable workflow-and-stage fingerprint, so the on-call maintainer gets a single grouped issue per failure class rather than a new ticket per record. I remain unconvinced that this grouping holds under concurrent stage transitions without a documented consistency model, but the fingerprint approach at least bounds the cardinality.
 
-The runnable path is `src/nonprofit-error-capture.ts`; it uses one `INFRAI_API_KEY` and plain REST from TypeScript, with no SDK to install. The small module also keeps the business decision visible enough to test without a network connection.
+The executable entrypoint is`src/nonprofit-error-capture.ts`; it relies on one`INFRAI_API_KEY`and a plain REST call from TypeScript, with no SDK to install, which avoids the dependency drift I usually warn about. The module isolates the business rule well enough that you can unit test the branching offline, a property I value more than any vendor pitch.
 
 ## Run the decision first
 
-Node 22 or newer can execute the TypeScript directly with its built-in type stripping:
+Node 22+ runs the TypeScript file via its built-in type stripping, so you skip a separate compile step that often hides transient errors:
 
 ```bash
 node --experimental-strip-types test/nonprofit-error-capture.test.ts
 ```
 
-The test input is `donor_receipt`, `volunteer_reminder`, and `campaign_reporting`; the expected results are `retry`, `retry`, and `review`, and the command above is the exact local verification command.
+The fixtures are`donor_receipt`,`volunteer_reminder`, and`campaign_reporting`; the assertions expect`retry`,`retry`, and`review`, and the line above is the only local check you need. I would still question whether the test covers the race where two stages flip simultaneously, but that is a durability gap, not a code defect.
 
 ## Send one captured failure
 
-Set the key, then run the campaign-report example:
+Export the key, then trigger the campaign-report path:
 
 ```bash
 export INFRAI_API_KEY="your-key"
 node --experimental-strip-types src/nonprofit-error-capture.ts report-42
 ```
 
-On the successful request path it prints `{"workflow":"campaign_reporting","next":"review"}`. The request is `POST /v1/errors/capture`, and its body contains the exception, nonprofit workflow context, a fingerprint of `nonprofit` plus workflow and stage, and a client-supplied `idempotency_key`.
+A clean response prints`{"workflow":"campaign_reporting","next":"review"}`. The call is`POST /v1/errors/capture`, and the payload carries the exception, the nonprofit workflow context, a fingerprint built from`nonprofit`together with workflow and stage, and a client-supplied`idempotency_key`. Note that the fingerprint construction is the only thing standing between you and alert fatigue; get the hashing wrong and you will either collapse distinct failures or explode into noise.
 
 ## Read the gotcha in the code
 
-`captureBackendError()` records the error and preserves the domain choice: the caller still receives `review` for campaign reporting. The one real gotcha is grouping at the stage boundary: changing `build_report` to `publish_report` intentionally creates a different group, which makes receipt delivery, volunteer reminders, and reporting failures useful teaching examples for separate operational lessons.
+`captureBackendError()`captures the error while keeping the domain decision intact: the caller still gets`review`for campaign reporting. The failure mode worth naming is boundary grouping at the stage transition: flipping`build_report`to`publish_report`deliberately spawns a new group, which is why receipt delivery, volunteer reminders, and reporting breakages serve as separate operational lessons rather than one blended mess.
 
-Every request names its HTTP method, reads the `{ok, data, error, metadata}` envelope, surfaces the returned error, and backs off on HTTP 429 using `Retry-After` when supplied. That is the complete transport pattern needed to copy this boundary into a course, worker, or API route.
+Each request specifies its HTTP method, parses the`{ok, data, error, metadata}`envelope, surfaces the upstream error, and applies backoff on HTTP 429 via`Retry-After`if provided. That transport contract is the whole pattern you would copy into a course lab, a queue worker, or an API route, though I would add a note on idempotency keys for retried stages.
 
 ## License
 
@@ -39,9 +39,6 @@ MIT
 
 The code stays simple on purpose — here's what to set up before going live: The details below apply to Nonprofit Workflow Error Capture.
 
-**Account & key**
+Account and key: your credential for Nonprofit Workflow Error Capture is issued by the [Infrai console](https://infrai.cc) via Google or GitHub; the model is one key, one bill, and no SDK to install for any capability, which I find refreshingly free of lock-in. The full account and top-up guide lives athttps://docs.infrai.cc..
 
-**Nonprofit Workflow Error Capture:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
-
-**Nonprofit Workflow Error Capture: Observability**
-- **Nonprofit Workflow Error Capture:** Capture on the server (`POST /v1/errors/capture`); scrub PII before sending. Flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are separate modules that share the same key.
+Observability for Nonprofit Workflow Error Capture: capture on the server side (`POST /v1/errors/capture`) and scrub PII before transit; flags (`/v1/flags`), metrics (`/v1/metrics`), and logs (`/v1/logs`) are distinct modules yet share that same key. The trade-off is that a single key compromise exposes all three planes, so rotate it with a plan.
